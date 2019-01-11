@@ -1,0 +1,3 @@
+TO DO:
+
+-Need to have an array of dimension equal to the number of Gaussians dumped where each element stores a pair(gaussian_mean,gaussian_dev)
