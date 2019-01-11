@@ -1,3 +1,5 @@
 TO DO:
 
--Need to have an array of dimension equal to the number of Gaussians dumped where each element stores a pair(gaussian_mean,gaussian_dev)
+-Need to dump Gaussians at intervals
+-need to scale width and height of Gaussians appropriately (e.g. for well-tempered MTD)
+-need to incorporate random seeds properly
