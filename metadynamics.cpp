@@ -11,7 +11,8 @@ Daniel J. Sharpe
 #include <random>
 using namespace std;
 
-typedef vector<pair<float,float>> fp_vec;
+#define OUTFILE "walker_info"; // root name for walker info output files
+typedef vector<pair<vector<double>,vector<double>>> fp_vec;
 
 /* Zwanzig's arbitrary rough potential. Parabolic with many small potential barriers
    superimposed, the amplitude parameter eps determining the roughness.
@@ -81,10 +82,14 @@ class MD_Simn {
     static vector<double> langevin_md(vector<double> xt, double T, Pot_funcs *pot_funcs_obj, \
                           Pes_membfunc pes_func, double gamma=0.1, double dt=0.001) {
         int i=0;
-        vector<double> force = cen_diff(xt,pot_funcs_obj,pes_func);
+        vector<double> force_pes = cen_diff(xt,pot_funcs_obj,pes_func);
+        vector<double> force_bias(2,0.1); // placeholder
+        vector<double> force_tot(force_pes.size(),0.);
+        for (int j=0;j<force_tot.size();j++) {
+            force_tot[j] = force_pes[j] + force_bias[j]; }
         for (auto x_i: xt) {
             double xi_w = rand_normal(0.1);
-            xt[i] += ((force[i]/gamma)*dt) + (pow(2.*T/gamma,0.5)*xi_w*pow(dt,0.5));
+            xt[i] += ((force_tot[i]/gamma)*dt) + (pow(2.*T/gamma,0.5)*xi_w*pow(dt,0.5));
             i++;
         }
         return xt;
@@ -97,17 +102,29 @@ class Walker {
 
     private:
 
+    int id;
+    // the bias potential for a given walker is defined by a set of Gaussians (and also 
     fp_vec gauss_dumped; // vector of std::pair(gauss_mean,gauss_stddev) for dumped Gaussians
+    vector<double> gauss_heights; // vector of heights for dumped Gaussians
 
     public:
 
     double T; // simulation temperature for this walker
     vector<double> xt; // current coordinates
 
-    Walker(double temp, vector<double> coords);
+    Walker(int walker_id, double temp, vector<double> coords);
+
+    void walker_update_gaussians(vector<double> gauss_width, double gauss_height) {
+        gauss_dumped.emplace_back(make_pair(xt,gauss_width));
+        gauss_heights.emplace_back(gauss_height);
+    }
+
+    // print information (temp, bias potential info...) of walker to file
+    void walker_print_info() {};
 };
 
-Walker::Walker(double temp, vector<double> coords) {
+Walker::Walker(int walker_id, double temp, vector<double> coords) {
+    id = walker_id;
     T = temp;
     xt = coords;
 };
@@ -121,10 +138,13 @@ class Metadynamics {
     bool wt; // if true, we use well-tempered MTD (rescale height of Gaussians)
     int N_replicas; // number of walkers (have MW-MTD if N_replicas > 1)
     int n_steps; // total number of MD steps
-    int n_dep; // step interval for depositing
+    int n_dep; // step interval for depositing Gaussians
     double T_lo, T_hi; // low/high temperature distribution of walkers
-    double W; // height of Gaussians
+    double W; // (starting, if using well-tempered MTD) height of Gaussians
+    vector<double> sigma; // standard deviation of Gaussians
+    vector<double> W_walkers; // if wt; current (rescaled) height of Gaussian for each walker
     double tau_G; // deposition stride
+    double omega; // energy rate
     int n_gauss; // total no. of Gaussians to be deposited
     vector<double> xt; // current coordinates
     Pot_funcs *pes_inst; // instance of class containing potentials
@@ -133,45 +153,56 @@ class Metadynamics {
     public:
 
     Metadynamics(const int N_rep, int n_md, int n_intvl1, double T1, double T2, double gauss_h, \
-                 double dep_stride, vector<double> x0, Pot_funcs *pot_funcs_obj, Pes_membfunc pes_func);
+                 vector<double> gauss_w, double dep_stride, vector<double> x0, Pot_funcs *pot_funcs_obj, Pes_membfunc pes_func);
     ~Metadynamics();
     vector<Walker> walkers;
 
     void drive_simn() {
 
-        double pot_val;
+        double pot_val; double gauss_height;
 
         for (int i=0;i<n_steps;i++) {
             cout << "Taking a step..." << endl;
-            vector<Walker> walkers_temp = walkers;
+            vector<Walker> walkers_temp = walkers; // temporary vector
             int j=0;
             for (auto mtd_walker: walkers) {
                 // single step for a single walker
-                cout << "  walker #:" << j+1 << endl;
-                cout << "   coords before: " << mtd_walker.xt[0] << "  " << mtd_walker.xt[1] << endl;
+                //cout << "  walker #:" << j+1 << endl;
+                //cout << "   coords before: " << mtd_walker.xt[0] << "  " << mtd_walker.xt[1] << endl;
                 walkers_temp[j].xt = MD_Simn::langevin_md(mtd_walker.xt,mtd_walker.T,pes_inst,pes);
-                cout << "   coords after:  " << walkers_temp[j].xt[0] << "  " << walkers_temp[j].xt[1] << endl;
+                //cout << "   coords after:  " << walkers_temp[j].xt[0] << "  " << walkers_temp[j].xt[1] << endl;
                 pot_val = (pes_inst->*pes)(mtd_walker.xt);
-                cout << "   pot value: " << pot_val << endl;
+                //cout << "   pot value: " << pot_val << endl;
+                if ((i!=0)&&(i%n_dep==0)) { // deposit a Gaussian
+                    if (wt) { // rescale Gaussian height
+                    // W_walkers[j] = ...;
+                    gauss_height = W_walkers[j];
+                    } else { gauss_height = W; }
+                    walkers_temp[j].walker_update_gaussians(sigma,gauss_height);
+                }
                 j++;
             }
             walkers = walkers_temp;
         }
+        for (auto mtd_walker: walkers) {
+            mtd_walker.walker_print_info(); }
     }
 };
 
 Metadynamics::Metadynamics(const int N_rep, int n_md, int n_intvl1, double T1, double T2, double gauss_h, \
-                           double dep_stride, vector<double> x0, Pot_funcs *pot_funcs_obj, Pes_membfunc pes_func) {
+                           vector<double> gauss_w, double dep_stride, vector<double> x0, Pot_funcs *pot_funcs_obj, Pes_membfunc pes_func) {
 
     N_replicas = N_rep; n_steps = n_md; n_dep = n_intvl1;
     T_lo = T1; T_hi = T2;
-    W = gauss_h; tau_G = dep_stride; n_gauss = n_steps / n_dep;
+    W = gauss_h; sigma = gauss_w, tau_G = dep_stride; omega = W/tau_G; n_gauss = n_steps / n_dep;
     xt = x0;
+    wt = false;
     pes_inst = pot_funcs_obj; pes = pes_func;
+    if (wt) { vector<double> W_walkers(W,N_replicas); }
 
     // initialise replicas
     for (int i=0;i<N_replicas;i++) {
-        walkers.emplace_back(Walker(T_lo+(double(i)*((T_hi-T_lo)/double(N_replicas-1))),xt));
+        walkers.emplace_back(Walker(i+1,T_lo+(double(i)*((T_hi-T_lo)/double(N_replicas-1))),xt));
         cout << "Walker #" << i << " temp: " << walkers[i].T << "\n";
     }
 }
@@ -199,7 +230,8 @@ int main () {
     cout << "Calling Zwanzig's pot. by member ptr: " << (zwanzig_inst.*pes)(x0) << "\n";
     cout << "And again, with the class instance as a ptr: " << (pes_inst_ptr->*pes)(x0) << "\n";
 
-    Metadynamics mtd1(5,1000,100,1.0,2.0,1.5,0.2,x0,pes_inst_ptr,pes);
+    vector<double> gauss_width(0.05,2);
+    Metadynamics mtd1(5,1000,10,1.0,2.0,1.5,gauss_width,0.2,x0,pes_inst_ptr,pes);
     mtd1.drive_simn();
 
     return 0;

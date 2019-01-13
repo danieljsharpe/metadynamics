@@ -1,5 +1,6 @@
 TO DO:
 
--Need to dump Gaussians at intervals
--need to scale width and height of Gaussians appropriately (e.g. for well-tempered MTD)
--need to incorporate random seeds properly
+-Langevin function needs to calculate bias potential as well as provided PES object (so need to call cen_diff_deriv with variables for mean/std_dev & height of Gaussians)
+-need to scale height of Gaussians appropriately (e.g. for well-tempered MTD)
+-need to incorporate random seeds, wt (well-tempering), and timestep variables properly
+-need to print walker information to output files
